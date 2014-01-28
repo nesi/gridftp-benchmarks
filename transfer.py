@@ -34,15 +34,31 @@ def execution(event, command):
     for line in cmd.stderr:
         print >> sys.stderr, "Command error: "+line
 
+def get_source_file(size, working_directory):
+    
+    filename = str(size)+'mb.file'
+    file_path = working_directory+os.path.sep+filename
+
+    logger.debug("Checking whether input file exists: %s", file_path)
+    if not os.path.exists(file_path):
+        logger.info("Creating file: %s", file_path)
+        os.system("head -c "+str(size)+"M < /dev/urandom > "+file_path)
+    
+    return file_path
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run gridftp benchmarks in a parameterized way')
-    parser.add_argument('-s','--size', help='the size of the input file (in megabytes)', required=True)
+    parser.add_argument('--sizes', help='the size of the input file (in megabytes)', required=True)
     parser.add_argument('-d','--working_directory', help='the directoriy where the input files are, default: current dir', required=False, default=os.getcwd())
     parser.add_argument('-t','--target', help='the target host/directory', required=True)
-    parser.add_argument('-p','--parallel', help='level of paralelization', required=False)
+    parser.add_argument('-p','--parallel', help='level of parallelization', required=False)
+    parser.add_argument('-s', '--source', help="the source host/directory, impies 3rd party transfer. if not specified, files will be uploaded from working directory", )
     args = parser.parse_args()
+    
+    source = args.source
+    if source and not source.endswith("/"):
+        source = source + "/"
 
     working_directory = args.working_directory
     if not os.path.isdir(working_directory):
@@ -56,8 +72,8 @@ if __name__ == '__main__':
             sys.exit(1)
 
     working_directory = os.path.abspath(working_directory)
-
-    sizes = args.size.split(',')
+    
+    sizes = args.sizes.split(',')
 
     results_time = {}
     results_speed = {}
@@ -65,29 +81,40 @@ if __name__ == '__main__':
     
     for size in sizes:
 
+        filename = str(size)+'mb.file'
+        
+        if source:
+            list_command = "globus-url-copy -list "+source
+            list_cmd = subprocess.Popen(list_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            list_cmd.wait()
+            source_path = source + filename
+            contains = False
+            for line in list_cmd.stdout:
+                if line.strip() == filename:
+                    contains = True
+            if not contains:
+                file_path = 'file://'+get_source_file(size, working_directory)
+                upload_command = 'globus-url-copy -vb ' + '-p 16 ' + file_path + ' ' + source_path
+                logger.info('Uploading source file for 3rd party transfer:\n\t'+upload_command)
+                upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                upload_cmd.wait()
+
+        else:
+            source_path = "file://"+get_source_file(size, working_directory)
+
         parallels = args.parallel.split(',')
 
         for parallel in parallels:
-
-
-            filename = str(size)+'mb.file'
-            file_path = working_directory+os.path.sep+filename
-
-
-            logger.debug("Checking whether input file exists: %s", file_path)
-            if not os.path.exists(file_path):
-                logger.info("Creating file: %s", file_path)
-                os.system("head -c "+str(size)+"M < /dev/urandom > "+file_path)
-
-            logger.debug("starting transfer")
 
             target = args.target
             if not target.endswith("/"):
                 target = target + "/"
 
-            command = 'globus-url-copy -vb ' + '-p ' + str(parallel) + ' file://'+file_path+' ' + target + filename
+            logger.debug("starting transfer")
 
-            logger.info("Starting transfer: "+command)
+            command = 'globus-url-copy -vb ' + '-p ' + str(parallel) + ' '+source_path+' ' + target + filename
+
+            logger.info("Starting transfer:\n\t"+command)
 
             parameter = str(size)+'mb_par_'+str(parallel)
 
