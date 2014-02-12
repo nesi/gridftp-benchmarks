@@ -50,9 +50,10 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='Run gridftp benchmarks in a parameterized way')
     parser.add_argument('--sizes', help='the size of the input file (in megabytes)', required=True)
-    parser.add_argument('-d','--working_directory', help='the directoriy where the input files are, default: current dir', required=False, default=os.getcwd())
+    parser.add_argument('-d','--working-directory', help='the directoriy where the input files are, default: current dir', required=False, default=os.getcwd())
     parser.add_argument('-t','--target', help='the target host/directory', required=True)
     parser.add_argument('-p','--parallel', help='level of parallelization', required=False)
+    parser.add_argument('-b', '--buffer-sizes', help='tcp-buffer-sizes', required=False)
     parser.add_argument('-s', '--source', help="the source host/directory, impies 3rd party transfer. if not specified, files will be uploaded from working directory", )
     args = parser.parse_args()
     
@@ -74,6 +75,11 @@ if __name__ == '__main__':
     working_directory = os.path.abspath(working_directory)
     
     sizes = args.sizes.split(',')
+    
+    if args.buffer_sizes:
+        tcp_buffer_sizes = args.buffer_sizes.split(',')
+    else:
+        tcp_buffer_sizes = [-1]
 
     results_time = {}
     results_speed = {}
@@ -94,7 +100,7 @@ if __name__ == '__main__':
                     contains = True
             if not contains:
                 file_path = 'file://'+get_source_file(size, working_directory)
-                upload_command = 'globus-url-copy -vb ' + '-p 16 ' + file_path + ' ' + source_path
+                upload_command = 'globus-url-copy -vb ' + '-p 4 ' + file_path + ' ' + source_path
                 logger.info('Uploading source file for 3rd party transfer:\n\t'+upload_command)
                 upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 upload_cmd.wait()
@@ -106,25 +112,35 @@ if __name__ == '__main__':
 
         for parallel in parallels:
 
-            target = args.target
-            if not target.endswith("/"):
-                target = target + "/"
+            for buffer_size in tcp_buffer_sizes:
 
-            logger.debug("starting transfer")
+                target = args.target
+                if not target.endswith("/"):
+                    target = target + "/"
 
-            command = 'globus-url-copy -vb ' + '-p ' + str(parallel) + ' '+source_path+' ' + target + filename
+                logger.debug("starting transfer")
 
-            logger.info("Starting transfer:\n\t"+command)
+                if buffer_size <= 0:
+                    buffer_size_parameter = ''
+                    parameter = "{0:05d}mb_par_{1:03d}_bs_default".format(int(size),int(parallel))
+                else:
+                    buffer_size_parameter = '-tcp-bs '+str(buffer_size)
+                    parameter = "{0:05d}mb_par_{1:03d}_bs_{2:07d}".format(int(size),int(parallel),int(buffer_size))
 
-            parameter = str(size)+'mb_par_'+str(parallel)
 
-            event = Event()
-            e = threading.Thread(target=execution, args=(event, command))
-            t = threading.Thread(target=timing, args=(event, size, parameter, results_time, results_speed))
-            t.start()  
-            e.start() 
-            while not event.is_set():
-                time.sleep(1)
+                command = 'globus-url-copy -vb ' + buffer_size_parameter + ' -p ' + str(parallel) + ' '+source_path+' ' + target + filename
+
+                logger.info("Starting transfer:\n\t"+command)
+
+
+
+                event = Event()
+                e = threading.Thread(target=execution, args=(event, command))
+                t = threading.Thread(target=timing, args=(event, size, parameter, results_time, results_speed))
+                t.start()  
+                e.start() 
+                while not event.is_set():
+                    time.sleep(1)
                 
 
     for run in sorted(results_speed.iterkeys()):
