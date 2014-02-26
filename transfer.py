@@ -93,7 +93,6 @@ class Transfer(object):
 
 
     def transfer(self, parameters):
-
         self.transfer_file(self.source, self.target, parameters)
 
 
@@ -159,7 +158,8 @@ class Scp(Transfer):
         pass
 
     def transfer_file(self, source_t, target_t, parameters=""):
-
+        if not parameters:
+            parameters = ""
         upload_command = 'scp -r ' + parameters + ' ' + source_t + ' ' + target_t
         logger.info('Transferring file:\n\t'+upload_command)
         upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
