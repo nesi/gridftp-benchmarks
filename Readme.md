@@ -1,7 +1,33 @@
 # Gridftp benchmarks
 
-Run the transfer.py script like so:
+Can run gridftp & scp transfers, creating files on the fly.
 
-    python transfer.py --working_directory /tmp/transfer -p 1,2,4,8,16,32,64 --sizes 1000 -t gsiftp://transfer.uoa.nesi.org.nz/tmp/
+ - doesn't create any directories except for the working directory that is specified in the arguments
+ - also, doesn't check size of files if they already exist in either working directory or source
+
+## Gridftp
+
+### local to gridftp:
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,2,4,8,16  -t gsiftp://transfer.uoa.nesi.org.nz/tmp/
+
+### gridftp to local
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,2,4,8,16  -s gsiftp://transfer.uoa.nesi.org.nz/tmp/ -t /tmp/target
+
+### gridftp to gridftp
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,2,4,8,16  -s gsiftp://transfer.uoa.nesi.org.nz/tmp/ -t gsiftp://gram.uoa.nesi.org.nz/tmp/
+
+## Scp
+
+### local to remote
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,4,8,16  -t gram.uoa.nesi.org.nz:/tmp/
+
+### remote to local
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,4,8,16 -s gram.uoa.nesi.org.nz:/tmp/ -t /tmp/scptransfers
 
 
+scp -r  gram.uoa.nesi.org.nz:/tmp/1mb.file /tmp/scptransfers/1mb.file

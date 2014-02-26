@@ -1,41 +1,31 @@
 #!/usr/bin/python
 
-import os
-import sys
-import subprocess
-import argparse
 
-from multiprocessing import Event
-import threading
-import time
+import argparse
+import os
 import subprocess
+import sys
+from multiprocessing import Event
+import time
+import threading
+
+__author__ = 'markus'
+
 
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-def timing(event, size, parameter, results_time, results_speed):
-    ts = time.time()
-    event.wait()
-    te = time.time()
-    elapsed_time = te - ts
-    logger.debug("ADDING: "+parameter+" : "+str(elapsed_time))
-    results_time[parameter] = elapsed_time
-    speed = float(size) / elapsed_time
-    # we want megabit per second
-    results_speed[parameter] = speed * 8.389
-
-def execution(event, command): 
-
-    cmd = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    cmd.wait()
-    event.set()
-    for line in cmd.stderr:
-        print >> sys.stderr, "Command error: "+line
-
 def get_source_file(size, working_directory):
-    
+
+    """Create files with the specified size.
+
+    Keyword arguments:
+    size -- the size in mb
+    working_directory -- the directory to create files in
+
+    """
+
     filename = str(size)+'mb.file'
     file_path = working_directory+os.path.sep+filename
 
@@ -43,27 +33,170 @@ def get_source_file(size, working_directory):
     if not os.path.exists(file_path):
         logger.info("Creating file: %s", file_path)
         os.system("head -c "+str(size)+"M < /dev/urandom > "+file_path)
-    
+
     return file_path
+
+def timing(event, size, results_time, results_speed, run_name):
+    ts = time.time()
+    event.wait()
+    te = time.time()
+    elapsed_time = te - ts
+    logger.debug("ADDING: "+run_name+" : "+str(elapsed_time))
+    results_time[run_name] = elapsed_time
+    speed = float(size) / elapsed_time
+    results_speed[run_name] = speed
+    # if we want megabit per second
+    #results_speed[run_name] = speed * 8.389
+
+def execution(event, transfer, parameters):
+
+    transfer.transfer(parameters)
+
+    event.set()
+
+def do_the_transfer(source, target, filename, size, runname, parameters=""):
+
+    logger.debug("starting transfer")
+
+    if ("gsiftp" in source) or ("gsiftp" in target):
+        transfer = Gridftp(source+filename, target+filename)
+    else:
+        transfer = Scp(source+filename, target+filename)
+
+    file_temp = get_source_file(size, working_directory)
+
+    transfer.prepare(file_temp, clean)
+
+    #logger.info("Starting transfer:\n\t"+str(gridftp))
+
+    event = Event()
+    e = threading.Thread(target=execution, args=(event, transfer, parameters))
+    t = threading.Thread(target=timing, args=(event, size, results_time, results_speed, runname))
+    t.start()
+    e.start()
+    while not event.is_set():
+        time.sleep(1)
+
+
+class Transfer(object):
+
+    def __init__(self, source, target):
+        self.source = source
+        self.target = target
+
+
+    def transfer(self, parameters):
+
+        self.transfer_file(self.source, self.target, parameters)
+
+
+class Gridftp(Transfer):
+
+    """Gridftp transfers"""
+
+    def __init__(self, source, target):
+        super(Gridftp, self).__init__(source, target)
+
+
+    def prepare(self, temp_file, clean):
+
+        if temp_file == self.source:
+            logger.info("Not uploading file, since temp file and source are the same")
+            return
+
+        if file:
+            if not self.file_exists(self.source):
+                logger.info('Uploading file to source destination')
+                self.transfer_file(temp_file, self.source)
+
+
+    def transfer_file(self, source_t, target_t, parameters=""):
+
+        upload_command = 'globus-url-copy -vb ' + ' ' + parameters +  ' ' + source_t + ' ' + target_t
+        logger.info('Transferring file:\n\t'+upload_command)
+        upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        upload_cmd.wait()
+
+        for line in upload_cmd.stderr:
+            print >> sys.stderr, "Command error: "+line
+
+        exists = self.file_exists(target_t)
+        return exists
+
+
+    def file_exists(self, file_url):
+        last_slash = file_url.rindex("/")
+
+        parent_url = file_url[:last_slash+1]
+        filename = file_url[last_slash+1:]
+
+        list_command = "globus-url-copy -list "+parent_url
+        list_cmd = subprocess.Popen(list_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        list_cmd.wait()
+
+        contains = False
+        for line in list_cmd.stdout:
+            if line.strip() == filename:
+                contains = True
+                break
+
+        return contains
+
+class Scp(Transfer):
+
+    def __init__(self, source, target):
+        super(Scp, self).__init__(source, target)
+
+    def prepare(self, temp_file):
+        # do nothing
+        pass
+
+    def transfer_file(self, source_t, target_t, parameters=""):
+
+        upload_command = 'scp -r ' + parameters + ' ' + source_t + ' ' + target_t
+        logger.info('Transferring file:\n\t'+upload_command)
+        upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        upload_cmd.wait()
+
+
+
+    def file_exists(self, file_url):
+
+        host_separator = file_url.index(":")
+
+        host = file_url[:host_separator]
+        path = file_url[host_separator+1:]
+
+        last_slash = path.rindex("/")
+        filename = path[last_slash+1:]
+
+        list_command = "ssh "+host+" ls "+path
+        list_cmd = subprocess.Popen(list_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        list_cmd.wait()
+
+        contains = False
+        for line in list_cmd.stdout:
+            if line.strip() == filename:
+                contains = True
+                break
+
+        return contains
+
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description='Run gridftp benchmarks in a parameterized way')
-    parser.add_argument('--sizes', help='the size of the input file (in megabytes)', required=True)
+    parser = argparse.ArgumentParser(description='Run transfer benchmarks in a parameterized way')
+    parser.add_argument('--sizes', help='the size of the input file (in megabytes)', required=False)
     parser.add_argument('-d','--working-directory', help='the directoriy where the input files are, default: current dir', required=False, default=os.getcwd())
     parser.add_argument('-t','--target', help='the target host/directory', required=True)
-    parser.add_argument('-p','--parallel', help='level of parallelization', required=False)
-    parser.add_argument('-b', '--buffer-sizes', help='tcp-buffer-sizes', required=False)
-    parser.add_argument('-s', '--source', help="the source host/directory, impies 3rd party transfer. if not specified, files will be uploaded from working directory", )
+    parser.add_argument('-s', '--source', help="the source host/directory. if not specified, files will be uploaded from working directory", )
+    parser.add_argument('-p', '--parameters', help="extra parameters, if '-p' is specified as well, {x} gets replaced with those values for seperate runs")
+    parser.add_argument('-x', help="comma separated list of parameters to use in the '-p' option")
     args = parser.parse_args()
-    
-    source = args.source
-    if source and not source.endswith("/"):
-        source = source + "/"
 
     working_directory = args.working_directory
     if not os.path.isdir(working_directory):
-        try: 
+        try:
             os.makedirs(working_directory)
         except OSError:
             print >> sys.stderr, "Can't create directory "+working_directory
@@ -73,78 +206,75 @@ if __name__ == '__main__':
             sys.exit(1)
 
     working_directory = os.path.abspath(working_directory)
-    
+
+    source = args.source
+
+    if not source:
+        source = working_directory
+
+    if not source.endswith("/"):
+        source = source + "/"
+
+    target = args.target
+    if not target.endswith("/"):
+        target = target + "/"
+
     sizes = args.sizes.split(',')
-    
-    if args.buffer_sizes:
-        tcp_buffer_sizes = args.buffer_sizes.split(',')
-    else:
-        tcp_buffer_sizes = [-1]
 
     results_time = {}
     results_speed = {}
 
-    
-    for size in sizes:
+    extra_parameters = args.parameters
 
-        filename = str(size)+'mb.file'
-        
-        if source:
-            list_command = "globus-url-copy -list "+source
-            list_cmd = subprocess.Popen(list_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            list_cmd.wait()
-            source_path = source + filename
-            contains = False
-            for line in list_cmd.stdout:
-                if line.strip() == filename:
-                    contains = True
-            if not contains:
-                file_path = 'file://'+get_source_file(size, working_directory)
-                upload_command = 'globus-url-copy -vb ' + '-p 4 ' + file_path + ' ' + source_path
-                logger.info('Uploading source file for 3rd party transfer:\n\t'+upload_command)
-                upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                upload_cmd.wait()
+    parameters = args.x
 
-        else:
-            source_path = "file://"+get_source_file(size, working_directory)
+    if parameters and not extra_parameters:
+        print "--parameters sepcified, but not --extra-parameters. that doesn't work"
+        sys.exit(1)
+    elif parameters and extra_parameters:
+        if not '{x}' in extra_parameters:
+            print "{x} not in extra parameters, doesn't make sense"
+            sys.exit(1)
 
-        parallels = args.parallel.split(',')
+    if parameters:
+        parameters = parameters.split(',')
 
-        for parallel in parallels:
+    i = 1
 
-            for buffer_size in tcp_buffer_sizes:
+    if sizes:
 
-                target = args.target
-                if not target.endswith("/"):
-                    target = target + "/"
+        for size in sizes:
 
-                logger.debug("starting transfer")
+            filename = str(size)+'mb.file'
 
-                if buffer_size <= 0:
-                    buffer_size_parameter = ''
-                    parameter = "{0:05d}mb_par_{1:03d}_bs_default".format(int(size),int(parallel))
-                else:
-                    buffer_size_parameter = '-tcp-bs '+str(buffer_size)
-                    parameter = "{0:05d}mb_par_{1:03d}_bs_{2:07d}".format(int(size),int(parallel),int(buffer_size))
+            size_string = "{0:05d}mb".format(int(size))
 
+            if parameters:
 
-                command = 'globus-url-copy -vb ' + buffer_size_parameter + ' -p ' + str(parallel) + ' '+source_path+' ' + target + filename
+                for p in parameters:
+                    runname_prefix = "Run {0:03d}: ".format(i)
 
-                logger.info("Starting transfer:\n\t"+command)
+                    pars = extra_parameters.replace("{x}", p)
+                    do_the_transfer(source, target, filename, size, runname_prefix + size_string + ' ['+pars+']', pars)
 
+                    i += 1
+            else:
+                runname_prefix = "Run {0:03d}: ".format(i)
 
+                do_the_transfer(source, target, filename, size, runname_prefix + size_string)
 
-                event = Event()
-                e = threading.Thread(target=execution, args=(event, command))
-                t = threading.Thread(target=timing, args=(event, size, parameter, results_time, results_speed))
-                t.start()  
-                e.start() 
-                while not event.is_set():
-                    time.sleep(1)
-                
+                i += 1
+
+    else:
+
+        print "not implmemented yet"
+        sys.exit(1)
 
     for run in sorted(results_speed.iterkeys()):
-        print("{0} : {1:.2f} mbps ({2:.2f} sec)".format(run,results_speed[run],results_time[run]))
+        print("{0} : {1:.2f} MB/s ({2:.2f} sec)".format(run,results_speed[run],results_time[run]))
+
+
+
 
 
 
