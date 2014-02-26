@@ -30,4 +30,3 @@ Can run gridftp & scp transfers, creating files on the fly.
     transfer.py --working-directory /tmp/transfer --sizes 1,4,8,16 -s gram.uoa.nesi.org.nz:/tmp/ -t /tmp/scptransfers
 
 
-scp -r  gram.uoa.nesi.org.nz:/tmp/1mb.file /tmp/scptransfers/1mb.file

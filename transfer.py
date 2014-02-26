@@ -16,7 +16,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_source_file(size, working_directory):
+
+def get_source_file(size, working_directory, clean=False):
 
     """Create files with the specified size.
 
@@ -28,6 +29,12 @@ def get_source_file(size, working_directory):
 
     filename = str(size)+'mb.file'
     file_path = working_directory+os.path.sep+filename
+
+    if clean:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
 
     logger.debug("Checking whether input file exists: %s", file_path)
     if not os.path.exists(file_path):
@@ -54,7 +61,7 @@ def execution(event, transfer, parameters):
 
     event.set()
 
-def do_the_transfer(source, target, filename, size, runname, parameters=""):
+def do_the_transfer(source, target, filename, size, runname, parameters="", clean=False):
 
     logger.debug("starting transfer")
 
@@ -63,7 +70,7 @@ def do_the_transfer(source, target, filename, size, runname, parameters=""):
     else:
         transfer = Scp(source+filename, target+filename)
 
-    file_temp = get_source_file(size, working_directory)
+    file_temp = get_source_file(size, working_directory, clean)
 
     transfer.prepare(file_temp, clean)
 
@@ -98,14 +105,14 @@ class Gridftp(Transfer):
         super(Gridftp, self).__init__(source, target)
 
 
-    def prepare(self, temp_file, clean):
+    def prepare(self, temp_file, clean=False):
 
         if temp_file == self.source:
             logger.info("Not uploading file, since temp file and source are the same")
             return
 
         if file:
-            if not self.file_exists(self.source):
+            if not self.file_exists(self.source) or clean:
                 logger.info('Uploading file to source destination')
                 self.transfer_file(temp_file, self.source)
 
@@ -147,7 +154,7 @@ class Scp(Transfer):
     def __init__(self, source, target):
         super(Scp, self).__init__(source, target)
 
-    def prepare(self, temp_file):
+    def prepare(self, temp_file, clean=False):
         # do nothing
         pass
 
@@ -157,8 +164,6 @@ class Scp(Transfer):
         logger.info('Transferring file:\n\t'+upload_command)
         upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         upload_cmd.wait()
-
-
 
     def file_exists(self, file_url):
 
@@ -192,6 +197,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--source', help="the source host/directory. if not specified, files will be uploaded from working directory", )
     parser.add_argument('-p', '--parameters', help="extra parameters, if '-p' is specified as well, {x} gets replaced with those values for seperate runs")
     parser.add_argument('-x', help="comma separated list of parameters to use in the '-p' option")
+    parser.add_argument('-c', '--clean', help="whether to clean up all generated input files and recreate them (to prevent caching affecting results)")
     args = parser.parse_args()
 
     working_directory = args.working_directory
@@ -241,6 +247,8 @@ if __name__ == '__main__':
 
     i = 1
 
+    clean = args.clean
+
     if sizes:
 
         for size in sizes:
@@ -255,13 +263,13 @@ if __name__ == '__main__':
                     runname_prefix = "Run {0:03d}: ".format(i)
 
                     pars = extra_parameters.replace("{x}", p)
-                    do_the_transfer(source, target, filename, size, runname_prefix + size_string + ' ['+pars+']', pars)
+                    do_the_transfer(source, target, filename, size, runname_prefix + size_string + ' ['+pars+']', pars, clean)
 
                     i += 1
             else:
                 runname_prefix = "Run {0:03d}: ".format(i)
 
-                do_the_transfer(source, target, filename, size, runname_prefix + size_string)
+                do_the_transfer(source, target, filename, size, runname_prefix + size_string, clean)
 
                 i += 1
 
