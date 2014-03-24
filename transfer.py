@@ -8,6 +8,7 @@ import sys
 from multiprocessing import Event
 import time
 import threading
+import csv
 
 __author__ = 'markus'
 
@@ -43,7 +44,8 @@ def get_source_file(size, working_directory, clean=False):
 
     return file_path
 
-def timing(event, size, results_time, results_speed, run_name):
+def timing(event, size, results_time, results_speed, run_name, transfer, logfile=None):
+
     ts = time.time()
     event.wait()
     te = time.time()
@@ -55,20 +57,36 @@ def timing(event, size, results_time, results_speed, run_name):
     # if we want megabit per second
     #results_speed[run_name] = speed * 8.389
 
-def execution(event, transfer, parameters):
+    if logfile:
+        with open(logfile, 'a') as csvfile:
+            writer = csv.writer(csvfile, delimiter=',')
+            row = [ts, te, elapsed_time, speed, size, run_name, transfer.command, transfer.parameters, transfer.transfer_command()]
+            writer.writerow(row)
 
-    transfer.transfer(parameters)
+
+
+def execution(event, transfer):
+
+    transfer.transfer()
 
     event.set()
 
-def do_the_transfer(source, target, filename, size, runname, parameters="", clean=False):
+def do_the_transfer(source, target, cmd, parameters, filename, size, runname, clean=False, logfile=None):
 
     logger.debug("starting transfer")
 
     if ("gsiftp" in source) or ("gsiftp" in target):
-        transfer = Gridftp(source+filename, target+filename)
+        if not cmd:
+            cmd = "globus-url-copy"
+
+        transfer = Gridftp(source+filename, target+filename, cmd, parameters)
     else:
-        transfer = Scp(source+filename, target+filename)
+        if not cmd:
+            cmd = 'scp'
+        transfer = Scp(source+filename, target+filename, cmd, parameters)
+
+    results_sizes[runname] = size
+    results_transfer[runname] = transfer
 
     file_temp = get_source_file(size, working_directory, clean)
 
@@ -76,9 +94,11 @@ def do_the_transfer(source, target, filename, size, runname, parameters="", clea
 
     #logger.info("Starting transfer:\n\t"+str(gridftp))
 
+    transfer_cmd = transfer.transfer_command()
+
     event = Event()
-    e = threading.Thread(target=execution, args=(event, transfer, parameters))
-    t = threading.Thread(target=timing, args=(event, size, results_time, results_speed, runname))
+    e = threading.Thread(target=execution, args=(event, transfer))
+    t = threading.Thread(target=timing, args=(event, size, results_time, results_speed, runname, transfer, logfile))
     t.start()
     e.start()
     while not event.is_set():
@@ -87,21 +107,23 @@ def do_the_transfer(source, target, filename, size, runname, parameters="", clea
 
 class Transfer(object):
 
-    def __init__(self, source, target):
+    def __init__(self, source, target, command, parameters):
         self.source = source
         self.target = target
+        self.command = command
+        self.parameters = parameters
 
 
-    def transfer(self, parameters):
-        self.transfer_file(self.source, self.target, parameters)
+    def transfer(self):
+        self.transfer_file()
 
 
 class Gridftp(Transfer):
 
     """Gridftp transfers"""
 
-    def __init__(self, source, target):
-        super(Gridftp, self).__init__(source, target)
+    def __init__(self, source, target, command='globus-url-copy', parameters=''):
+        super(Gridftp, self).__init__(source, target, command, parameters)
 
 
     def prepare(self, temp_file, clean=False):
@@ -113,14 +135,19 @@ class Gridftp(Transfer):
         if file:
             if not self.file_exists(self.source) or clean:
                 logger.info('Uploading file to source destination')
+
                 self.transfer_file(temp_file, self.source)
+                prepare_transfer = Gridftp(temp_file, self.source, "")
+                prepare_transfer.transfer()
+
+    def transfer_command(self):
+
+        return self.command + ' -vb ' + ' ' + self.parameters + ' ' + self.source + ' ' + self.target
 
 
-    def transfer_file(self, source_t, target_t, parameters):
+    def transfer_file(self):
 
-        if not parameters:
-            parameters = ""
-        upload_command = 'globus-url-copy -vb ' + ' ' + parameters +  ' ' + source_t + ' ' + target_t
+        upload_command = self.transfer_command()
         logger.info('Transferring file:\n\t'+upload_command)
         upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         upload_cmd.wait()
@@ -128,11 +155,12 @@ class Gridftp(Transfer):
         for line in upload_cmd.stderr:
             print >> sys.stderr, "Command error: "+line
 
-        exists = self.file_exists(target_t)
+        exists = self.file_exists(self.target)
         return exists
 
 
     def file_exists(self, file_url):
+
         last_slash = file_url.rindex("/")
 
         parent_url = file_url[:last_slash+1]
@@ -152,17 +180,19 @@ class Gridftp(Transfer):
 
 class Scp(Transfer):
 
-    def __init__(self, source, target):
-        super(Scp, self).__init__(source, target)
+    def __init__(self, source, target, command='scp', parameters=''):
+        super(Scp, self).__init__(source, target, command, parameters)
 
     def prepare(self, temp_file, clean=False):
         # do nothing
         pass
 
-    def transfer_file(self, source_t, target_t, parameters=""):
-        if not parameters:
-            parameters = ""
-        upload_command = 'scp -r ' + parameters + ' ' + source_t + ' ' + target_t
+    def transfer_command(self):
+
+        return self.command + ' -r ' + self.parameters + ' ' + self.source + ' ' + self.target
+
+    def transfer_file(self):
+        upload_command = self.transfer_command()
         logger.info('Transferring file:\n\t'+upload_command)
         upload_cmd = subprocess.Popen(upload_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         upload_cmd.wait()
@@ -199,7 +229,9 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--source', help="the source host/directory. if not specified, files will be uploaded from working directory", )
     parser.add_argument('-p', '--parameters', help="extra parameters, if '-p' is specified as well, {x} gets replaced with those values for seperate runs")
     parser.add_argument('-x', help="comma separated list of parameters to use in the '-p' option")
-    parser.add_argument('-c', '--clean', help="whether to clean up all generated input files and recreate them (to prevent caching affecting results)")
+    parser.add_argument('--clean', help="whether to clean up all generated input files and recreate them (to prevent caching affecting results)")
+    parser.add_argument('-r', '--results', help="location of output (csv) file for runs")
+    parser.add_argument('-c', '--command', help="alternative command/path to command for transfer client executable")
     args = parser.parse_args()
 
     working_directory = args.working_directory
@@ -212,6 +244,10 @@ if __name__ == '__main__':
         if not os.path.isdir(working_directory):
             print >> sys.stderr, 'Directory does not exist or is not directory: '+working_directory
             sys.exit(1)
+
+    logfile = args.results
+
+    cmd = args.command
 
     working_directory = os.path.abspath(working_directory)
 
@@ -230,7 +266,9 @@ if __name__ == '__main__':
     sizes = args.sizes.split(',')
 
     results_time = {}
+    results_sizes = {}
     results_speed = {}
+    results_transfer = {}
 
     extra_parameters = args.parameters
 
@@ -255,6 +293,8 @@ if __name__ == '__main__':
 
         for size in sizes:
 
+            size = int(size)
+
             filename = str(size)+'mb.file'
 
             size_string = "{0:05d}mb".format(int(size))
@@ -262,16 +302,17 @@ if __name__ == '__main__':
             if parameters:
 
                 for p in parameters:
-                    runname_prefix = "Run {0:03d}: ".format(i)
+                    runname_prefix = "run {0:03d}".format(i)
 
                     pars = extra_parameters.replace("{x}", p)
-                    do_the_transfer(source, target, filename, size, runname_prefix + size_string + ' ['+pars+']', pars, clean)
+
+                    do_the_transfer(source, target, cmd, pars, filename, size, runname_prefix, clean, logfile)
 
                     i += 1
             else:
-                runname_prefix = "Run {0:03d}: ".format(i)
+                runname_prefix = "run {0:03d}".format(i)
 
-                do_the_transfer(source, target, filename, size, runname_prefix + size_string, clean)
+                do_the_transfer(source, target, cmd, "", filename, size, runname_prefix, clean, logfile)
 
                 i += 1
 
@@ -281,7 +322,9 @@ if __name__ == '__main__':
         sys.exit(1)
 
     for run in sorted(results_speed.iterkeys()):
-        print("{0} : {1:.2f} MB/s ({2:.2f} sec)".format(run,results_speed[run],results_time[run]))
+        transfer = results_transfer[run]
+        size = results_sizes[run]
+        print("{0} [{1} {2}]: {3:.2f} MB/s ({4} mb / {5:.2f} sec)".format(run, transfer.command, transfer.parameters, results_speed[run], size, results_time[run]))
 
 
 
