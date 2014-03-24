@@ -116,6 +116,7 @@ class Transfer(object):
 
     def transfer(self):
         self.transfer_file()
+        logger.info("Transfer finished.")
 
 
 class Gridftp(Transfer):
@@ -230,8 +231,10 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--parameters', help="extra parameters, if '-p' is specified as well, {x} gets replaced with those values for seperate runs")
     parser.add_argument('-x', help="comma separated list of parameters to use in the '-p' option")
     parser.add_argument('--clean', help="whether to clean up all generated input files and recreate them (to prevent caching affecting results)")
-    parser.add_argument('-r', '--results', help="location of output (csv) file for runs")
+    parser.add_argument('-o', '--output', help="location of output (csv) file for runs")
     parser.add_argument('-c', '--command', help="alternative command/path to command for transfer client executable")
+    parser.add_argument('-r', '--repeats', help="repeat all runs x times, 0, means endless loop, default time inbetween transfers: 10 minutes")
+    parser.add_argument('--delta', help="time inbetween repeats")
     args = parser.parse_args()
 
     working_directory = args.working_directory
@@ -245,9 +248,21 @@ if __name__ == '__main__':
             print >> sys.stderr, 'Directory does not exist or is not directory: '+working_directory
             sys.exit(1)
 
-    logfile = args.results
+    logfile = args.output
 
     cmd = args.command
+
+    repeats = args.repeats
+    if not repeats:
+        repeats = 1
+
+    repeats = int(repeats)
+
+    delta = args.delta
+    if not delta:
+        delta = 600
+
+    delta = int(delta)
 
     working_directory = os.path.abspath(working_directory)
 
@@ -265,11 +280,6 @@ if __name__ == '__main__':
 
     sizes = args.sizes.split(',')
 
-    results_time = {}
-    results_sizes = {}
-    results_speed = {}
-    results_transfer = {}
-
     extra_parameters = args.parameters
 
     parameters = args.x
@@ -285,46 +295,65 @@ if __name__ == '__main__':
     if parameters:
         parameters = parameters.split(',')
 
-    i = 1
-
     clean = args.clean
 
-    if sizes:
+    repeat = 0
 
-        for size in sizes:
+    while repeats == 0 or repeat < repeats:
 
-            size = int(size)
+        repeat = repeat + 1
 
-            filename = str(size)+'mb.file'
+        if repeat > 1:
+            logger.info("Sleeping for "+str(delta)+" seconds")
+            time.sleep(delta)
 
-            size_string = "{0:05d}mb".format(int(size))
+        i = 1
+        results_time = {}
+        results_sizes = {}
+        results_speed = {}
+        results_transfer = {}
 
-            if parameters:
 
-                for p in parameters:
+
+        if sizes:
+
+            for size in sizes:
+
+                size = int(size)
+
+                filename = str(size)+'mb.file'
+
+                size_string = "{0:05d}mb".format(int(size))
+
+                if parameters:
+
+                    for p in parameters:
+                        if ( repeats == 0 ) or ( repeats > 1):
+                            runname_prefix = "run {0:05d}-{1:03d}".format(repeat, i)
+                        else:
+                            runname_prefix = "run {0:03d}".format(i)
+
+                        pars = extra_parameters.replace("{x}", p)
+
+                        do_the_transfer(source, target, cmd, pars, filename, size, runname_prefix, clean, logfile)
+
+                        i += 1
+                else:
                     runname_prefix = "run {0:03d}".format(i)
 
-                    pars = extra_parameters.replace("{x}", p)
-
-                    do_the_transfer(source, target, cmd, pars, filename, size, runname_prefix, clean, logfile)
+                    do_the_transfer(source, target, cmd, "", filename, size, runname_prefix, clean, logfile)
 
                     i += 1
-            else:
-                runname_prefix = "run {0:03d}".format(i)
 
-                do_the_transfer(source, target, cmd, "", filename, size, runname_prefix, clean, logfile)
+        else:
 
-                i += 1
+            print "not implmemented yet"
+            sys.exit(1)
 
-    else:
-
-        print "not implmemented yet"
-        sys.exit(1)
-
-    for run in sorted(results_speed.iterkeys()):
-        transfer = results_transfer[run]
-        size = results_sizes[run]
-        print("{0} [{1} {2}]: {3:.2f} MB/s ({4} mb / {5:.2f} sec)".format(run, transfer.command, transfer.parameters, results_speed[run], size, results_time[run]))
+        for run in sorted(results_speed.iterkeys()):
+            transfer = results_transfer[run]
+            size = results_sizes[run]
+            print("{0} [{1} {2}]: {3:.2f} MB/s ({4} mb / {5:.2f} sec)".format(run, transfer.command, transfer.parameters, results_speed[run], size, results_time[run]))
 
 
 
