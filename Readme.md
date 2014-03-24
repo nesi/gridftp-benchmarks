@@ -39,3 +39,15 @@ Can run gridftp & scp transfers, creating files on the fly.
 
    transfer.py --working-directory /home/markus/temp/transfer_temp --sizes 1000  -t gsiftp://transfer-i.uoa.nesi.org.nz/~/ --parameters="-p {x}" -x 1,2,4,8,16
 
+## Repeat tests
+
+### scp local to remote, every 30 minutes, without limit
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,4,8,16  -t gram.uoa.nesi.org.nz:/tmp/ --repeats 0 --delta 1800
+
+### scp local to remote, every 30 minutes, 5 times
+
+    transfer.py --working-directory /tmp/transfer --sizes 1,4,8,16  -t gram.uoa.nesi.org.nz:/tmp/ --repeats 5 --delta 1800
+
+
+

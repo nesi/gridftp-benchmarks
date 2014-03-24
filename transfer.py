@@ -60,7 +60,7 @@ def timing(event, size, results_time, results_speed, run_name, transfer, logfile
     if logfile:
         with open(logfile, 'a') as csvfile:
             writer = csv.writer(csvfile, delimiter=',')
-            row = [ts, te, elapsed_time, speed, size, run_name, transfer.command, transfer.parameters, transfer.transfer_command()]
+            row = [ts, te, elapsed_time, speed, size, run_name, transfer.command, transfer.parameters, transfer.source, transfer.target, transfer.transfer_command()]
             writer.writerow(row)
 
 
